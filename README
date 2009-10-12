@@ -1,0 +1,6 @@
+klouzher - an IRC bot written in clojure
+
+libs:
+
+* event -- library for event dispatchers and handlers
+
