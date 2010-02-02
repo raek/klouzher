@@ -11,79 +11,130 @@
 (defn tag? [expr]
   (= (class expr) se.raek.Tag))
 
-(defn type [expr]
-  (cond (tag? expr)     (key expr)
-	(symbol? expr)  ::symbol
-	(keyword? expr) ::keyword
-	(number? expr)  ::number
-	(string? expr)  ::string
-	(char? expr)    ::character
-	(bool? expr)    ::boolean
-	(nil? expr)     ::nil
-	(list? expr)    ::list
-	(vector? expr)  ::vector
-	(map? expr)     ::map
-	(set? expr)     ::set
-	:else           ::unsupported))
+(def pred-type-map
+     {symbol? ::symbol, keyword? ::keyword, number? ::number,
+      string? ::string, char? ::character, bool? ::boolean, nil? ::nil,
+      list? ::list, vector? ::vector, map? ::map, set? ::set})
 
+(defn pred-get
+  "Steps through all the keys in pred-map, which are mutually exclusive
+  predicates, finds the first one that returns true when passed expr, and
+  returs the value associated with that predicate.
+  
+  Only one of the predicates should yield true for the given expr. Otherwise,
+  this function gives no guarantees regarding which one will be tried first.
+  
+  (map #(pred-get {neg? -1, zero? 0, pos? 1} %) [5 -2 0]) => (1 -1 0)"
+  [pred-map expr]
+  (loop [preds (keys pred-map)]
+    (when-first [pred preds]
+      (if (pred expr)
+	(get pred-map pred)
+	(recur (rest preds))))))
+
+(defn type [expr]
+  (if (tag? expr)
+    (key expr)
+    (let [type (loop [preds (keys pred-type-map)]
+		 (cond (empty? preds) nil
+		       ((first preds) expr) (get pred-type-map (first preds))
+		       :else (recur (rest preds))))]
+      (if type
+	type
+	::external))))
+      
 (defn error [message expr]
   (throw (proxy [java.lang.Exception] [(.concat message (pr-str expr))])))
 
-(def *global-env* (atom {}))
+(defn make-env
+  ([]
+     (ref [nil {}]))
+  ([parent]
+     (ref [parent {}])))
 
-(sort
- (keys
-  (swap! *global-env* into
-	 (concat (map (fn [x] [x (tag ::builtin (clojure.core/eval x))])
-		      '(+ - * / = > >= < <= nil? symbol? keyword? list?))
-		 (map (fn [x] [x (tag ::special (keyword x))])
-		      '(if lambda quote do))
-		 [['π Math/PI] ['e Math/E]]
-		 (map (fn [[name params code]] [name (tag ::function [params code *global-env*])])
-		      '((inc (x) (+ x 1))
-			(dec (x) (- x 1))
-			(not (x) (if x false true))
-			(and (x y) (if x (if y true false) false))
-			(or (x y) (if x true (if y true false)))
-			(zero? (x) (= x 0))
-			(pos? (> x 0))
-			(neg? (< x 0))
-			(fak (n) (if (= n 0)
-				   1
-				   (* n (fak (dec n))))))
-		      )))))
+(defn find-env
+  "Finds the nearest environment in which the symbol is bound."
+  [sym env]
+  (let [[parent bindings] (deref env)]
+    (cond (contains? bindings sym) env
+	  (not (nil? parent)) (recur sym parent)
+	  :else (error "Unbound symbol: " sym))))
 
-(derive ::literal ::type)
-(derive ::keyword ::literal)
-(derive ::number ::literal)
-(derive ::string ::literal)
-(derive ::character ::literal)
-(derive ::boolean ::literal)
-(derive ::nil ::literal)
-(derive ::literal ::type)
-(derive ::vector ::collection)
-(derive ::map ::collection)
-(derive ::set ::collection)
-(derive ::collection ::type)
-(derive ::function ::internal)
-(derive ::special ::internal)
-(derive ::builtin ::internal)
-(derive ::internal ::type)
+(defn lookup
+  "Gives the value of the symbol as of the nearest binding found."
+  [sym env]
+  (let [[parent bindings] (deref env)]
+    (cond (contains? bindings sym) (get bindings sym)
+	  (not (nil? parent)) (recur sym parent)
+	  :else (error "Unbound symbol: " sym))))
+  
+
+(defn add-bindings [env new-bindings]
+  (let [[parent bindings] (deref env)]
+    (ref-set env [parent (merge bindings new-bindings)])))
+
+(defn add-builtins [env builtins]
+  (add-bindings env (into {} (map (fn [x]
+				    [x (tag ::builtin (clojure.core/eval x))])
+				  builtins))))
+
+(defn add-special-forms [env specials]
+  (add-bindings env (into {} (map (fn [x]
+				    [x (tag ::special (keyword x))])
+				  specials))))
+
+(defn add-function-definitions [env functions]
+  (add-bindings env (into {} (map (fn [[name params code]]
+				    [name (tag ::function [params code env])])
+				  functions))))
+
+(defn bound-symbols [env]
+  (sort (keys (second (deref env)))))
+
+(def *global-env* (make-env))
+
+(dosync
+ (add-builtins *global-env*
+	       '(+ - * / = > >= < <= nil? symbol? keyword? list? print println type))
+ (add-special-forms *global-env*
+		    '(if lambda quote do set!))
+ (add-bindings *global-env*
+	       {'π Math/PI, 'e Math/E})
+ (add-function-definitions *global-env*
+			   '((inc (x) (+ x 1))
+			     (dec (x) (- x 1))
+			     (not (x) (if x false true))
+			     (and (x y) (if x (if y true false) false))
+			     (or (x y) (if x true (if y true false)))
+			     (zero? (x) (= x 0))
+			     (pos? (> x 0))
+			     (neg? (< x 0))
+			     (fak (n) (if (= n 0)
+					1
+					(* n (fak (dec n)))))))
+ (bound-symbols *global-env*))
+
+(doseq [sub [::literal ::collection ::internal]]
+  (derive sub ::type))
+(doseq [sub [::keyword ::number ::string ::character ::boolean ::nil]]
+  (derive sub ::literal))
+(doseq [sub [::vector ::map ::set ::list]]
+  (derive sub ::collection))
+(doseq [sub [::builtin ::special ::function]]
+  (derive sub ::internal))
 
 (defmulti eval (fn [expr env] (type expr)))
 (defmulti apply (fn [f args] (type f)))
 (defmulti special (fn [f args env] (val f)))
 
 (defn top-eval [expr]
-  (eval expr *global-env*))
+  (dosync (eval expr *global-env*)))
 
 (defmethod eval ::literal [lit env]
   lit)
 
 (defmethod eval ::symbol [sym env]
-  (if (contains? @env sym)
-    (get @env sym)
-    (error "Unbound symbol: " sym)))
+  (lookup sym env))
 
 (defmethod eval ::list [lst env]
   (let [f (eval (first lst) env)
@@ -104,7 +155,7 @@
 
 (defmethod apply ::function [[_ f] args]
   (let [[params code env] f]
-    (eval code (atom (merge @env (zipmap params args))))))
+    (eval code (ref [env (zipmap params args)]))))
 
 (defmethod apply :default [f args]
   (error "Can't use as function: " f))
@@ -122,6 +173,9 @@
 
 (defmethod special :do [f args env]
   (last (map #(eval % env) args)))
+
+(defmethod special :set! [f [sym value] env]
+  (add-bindings (find-env sym env) {sym (eval value env)}))
 
 (defmethod special :default [f args env]
   (error "Unknown special form: " (val f)))
