@@ -45,10 +45,15 @@
   "Remove an event handler from an event dispatcher."
   (dissoc-in handlers [event-type key-or-agent]))
 
+(def trash (atom []))
+
 (defn dispatch-event [handlers event-type & args]
   "Dispatches an event."
   (doseq [[key-or-agent f] (get handlers event-type)]
-      (if (keyword? key-or-agent)
-	(apply f (cons event-type args))
-	(apply send key-or-agent f (cons event-type args))))
-  handlers)
+      (try
+       (if (keyword? key-or-agent)
+	 (apply f args)
+	 (apply send key-or-agent f args))
+       (catch Throwable e
+	 (swap! trash conj e))))
+      handlers)

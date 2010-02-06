@@ -8,7 +8,7 @@
 (defn make-charset [name]
   (let [charset (Charset/forName name)]
     (struct-map charset-struct
-      :name (keyword (.name charset))
+      :name (.name charset)
       :encoder (.. charset
 		   (newEncoder)
 		   (onUnmappableCharacter CodingErrorAction/REPLACE))

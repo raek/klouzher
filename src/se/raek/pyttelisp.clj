@@ -14,7 +14,8 @@
 (def pred-type-map
      {symbol? ::symbol, keyword? ::keyword, number? ::number,
       string? ::string, char? ::character, bool? ::boolean, nil? ::nil,
-      list? ::list, vector? ::vector, map? ::map, set? ::set})
+      list? ::list, vector? ::vector, map? ::map, set? ::set,
+      #(= (class %) clojure.lang.Cons) ::list})
 
 (defn pred-get
   "Steps through all the keys in pred-map, which are mutually exclusive
@@ -46,11 +47,8 @@
 (defn error [message expr]
   (throw (proxy [java.lang.Exception] [(.concat message (pr-str expr))])))
 
-(defn make-env
-  ([]
-     (ref [nil {}]))
-  ([parent]
-     (ref [parent {}])))
+(defn make-env [parent]
+  (ref [parent {}]))
 
 (defn find-env
   "Finds the nearest environment in which the symbol is bound."
@@ -67,7 +65,11 @@
     (cond (contains? bindings sym) (get bindings sym)
 	  (not (nil? parent)) (recur sym parent)
 	  :else (error "Unbound symbol: " sym))))
-  
+
+(defn add-binding [env sym value]
+  (let [[parent bindings] (deref env)]
+    (ref-set env [parent (assoc bindings sym value)]))
+  value)
 
 (defn add-bindings [env new-bindings]
   (let [[parent bindings] (deref env)]
@@ -91,15 +93,15 @@
 (defn bound-symbols [env]
   (sort (keys (second (deref env)))))
 
-(def *global-env* (make-env))
+(def *global-env* (make-env nil))
 
 (dosync
  (add-builtins *global-env*
-	       '(+ - * / = > >= < <= nil? symbol? keyword? list? print println type))
+	       '(+ - * / = > >= < <= nil? symbol? keyword? list? print println type get assoc dissoc nth))
  (add-special-forms *global-env*
-		    '(if lambda quote do set!))
+		    '(if lambda quote do set! def!))
  (add-bindings *global-env*
-	       {'π Math/PI, 'e Math/E})
+	       {'π Math/PI, 'e Math/E, 'symbols (tag ::builtin #(bound-symbols *global-env*))})
  (add-function-definitions *global-env*
 			   '((inc (x) (+ x 1))
 			     (dec (x) (- x 1))
@@ -128,7 +130,9 @@
 (defmulti special (fn [f args env] (val f)))
 
 (defn top-eval [expr]
-  (dosync (eval expr *global-env*)))
+  (try
+   (dosync (eval expr *global-env*))
+   (catch Throwable e (format "Exception Caught: %s: %s" (class e) (.getMessage e)))))
 
 (defmethod eval ::literal [lit env]
   lit)
@@ -143,6 +147,9 @@
       (special f args env)
       (let [eval-args (vec (map #(eval % env) args))]
 	(apply f eval-args)))))
+
+(defmethod eval ::map [coll env]
+  (into {} (map (fn [[k v]] [(eval k env) (eval v env)]) coll)))
 
 (defmethod eval ::collection [coll env]
   (into (empty coll) (map #(eval % env) coll)))
@@ -174,8 +181,11 @@
 (defmethod special :do [f args env]
   (last (map #(eval % env) args)))
 
+(defmethod special :def! [f [sym value] env]
+  (add-binding env sym (eval value env)))
+
 (defmethod special :set! [f [sym value] env]
-  (add-bindings (find-env sym env) {sym (eval value env)}))
+  (add-binding (find-env sym env) sym (eval value env)))
 
 (defmethod special :default [f args env]
   (error "Unknown special form: " (val f)))
