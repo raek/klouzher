@@ -1,5 +1,15 @@
-klouzher - an IRC bot written in clojure
+klouzher - an IRC bot with an interpreter for a Lisp-like language written in clojure
+
+the main code is in se.raek.bot
 
 libs included in this project:
 
-* com.github.raek.event -- library for event dispatchers and handlers
+* se.raek.pyttelisp -- interpreter for a Lisp-like language
+* se.raek.html -- simple html parser based on clojure.xml and TagSoup
+* se.raek.irc -- parsing and formatting of IRC messages
+* se.raek.irc-connection -- sending and receiving IRC messages
+* se.raek.coding -- converting between strings and byte arrays
+* se.raek.agnostic-connection -- sending and receiving CRLR-terminated byte arrays
+* se.raek.event -- event dispatchers and handlers
+* se.raek.file-ref -- persistent (stored-in-a-file) references
+* se.raek.swank-server -- start a Swank server

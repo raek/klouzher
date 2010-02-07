@@ -85,5 +85,5 @@
 
 ;(def l (make-connection "localhost" 9001 :local))
 ;(do-thread handle-connection l)
-(def q (make-connection "irc.quakenet.org" 6669 :local))
-(do-thread handle-connection q)
+;(def q (make-connection "irc.quakenet.org" 6669 :local))
+;(do-thread handle-connection q)
